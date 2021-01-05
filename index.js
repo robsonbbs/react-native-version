@@ -47,10 +47,10 @@ function getDefaults() {
 function getPlistFilenames(xcode) {
 	return unique(
 		flattenDeep(
-			xcode.document.projects.map(project => {
-				return project.targets.filter(Boolean).map(target => {
+			xcode.document.projects.map((project) => {
+				return project.targets.filter(Boolean).map((target) => {
 					return target.buildConfigurationsList.buildConfigurations.map(
-						config => {
+						(config) => {
 							return config.ast.value.get("buildSettings").get("INFOPLIST_FILE")
 								.text;
 						}
@@ -184,6 +184,7 @@ function version(program, projectPath) {
 	var appJSON;
 	const appJSONPath = path.join(projPath, "app.json");
 	const isExpoApp = isExpoProject(projPath);
+	const isBareExpoWorkflow = programOpts.isBareExpoWorkflow;
 
 	isExpoApp && log({ text: "Expo detected" }, programOpts.quiet);
 
@@ -203,11 +204,10 @@ function version(program, projectPath) {
 	var ios;
 
 	if (!targets.length || targets.indexOf("android") > -1) {
-		android = new Promise(function(resolve, reject) {
+		android = new Promise(function (resolve, reject) {
 			log({ text: "Versioning Android..." }, programOpts.quiet);
 
 			var gradleFile;
-
 			try {
 				gradleFile = fs.readFileSync(programOpts.android, "utf8");
 			} catch (err) {
@@ -223,8 +223,7 @@ function version(program, projectPath) {
 						}
 					]);
 			}
-
-			if (!programOpts.incrementBuild) {
+			if ((!programOpts.incrementBuild && !isExpoApp) || isBareExpoWorkflow) {
 				gradleFile = gradleFile.replace(
 					/versionName (["'])(.*)["']/,
 					"versionName $1" + appPkg.version + "$1"
@@ -245,8 +244,17 @@ function version(program, projectPath) {
 						android: Object.assign({}, appJSON.expo.android, {
 							versionCode: newVersionCode
 						})
-					})
-				});
+					});
+				} else {
+					gradleFile = gradleFile.replace(/versionCode (\d+)/, function (
+						match,
+						cg1
+					) {
+						const newVersionCodeNumber = getNewVersionCode(
+							programOpts,
+							parseInt(cg1, 10),
+							appPkg.version
+						);
 
 				gradleFile = gradleFile.replace(/versionCode (\d+)/, function(
 					match,
@@ -256,7 +264,39 @@ function version(program, projectPath) {
 				});
 			}
 
-			fs.writeFileSync(programOpts.android, gradleFile);
+			if (isBareExpoWorkflow) {
+				// if bare expo workflow, combine the two exclusive blocks above
+				const versionCode = parseInt(
+					dottie.get(appJSON, "expo.android.versionCode")
+				);
+				const newVersionCode = getNewVersionCode(
+					programOpts,
+					versionCode,
+					appPkg.version
+				);
+				appJSON = Object.assign({}, appJSON, {
+					expo: Object.assign({}, appJSON.expo, {
+						android: Object.assign({}, appJSON.expo.android, {
+							versionCode: newVersionCode
+						})
+					})
+				});
+
+				gradleFile = gradleFile.replace(/versionCode (\d+)/, function (
+					match,
+					cg1
+				) {
+					return "versionCode " + newVersionCode;
+				});
+				fs.writeFileSync(appJSONPath, JSON.stringify(appJSON, null, 2));
+				fs.writeFileSync(programOpts.android, gradleFile);
+			}
+
+			if (isExpoApp) {
+				fs.writeFileSync(appJSONPath, JSON.stringify(appJSON, null, 2));
+			} else {
+				fs.writeFileSync(programOpts.android, gradleFile);
+			}
 
 			log({ text: "Android updated" }, programOpts.quiet);
 			resolve();
@@ -264,10 +304,10 @@ function version(program, projectPath) {
 	}
 
 	if (!targets.length || targets.indexOf("ios") > -1) {
-		ios = new Promise(function(resolve, reject) {
+		ios = new Promise(function (resolve, reject) {
 			log({ text: "Versioning iOS..." }, programOpts.quiet);
 
-			if (isExpoApp) {
+			if (isBareExpoWorkflow) {
 				if (!programOpts.neverIncrementBuild) {
 					const buildNumber = dottie.get(appJSON, "expo.ios.buildNumber");
 					const newBuildVersion = getNewVersionCode(
@@ -289,7 +329,10 @@ function version(program, projectPath) {
 						appJSON = Object.assign({}, appJSON, {
 							expo: Object.assign({}, appJSON.expo, {
 								hooks: Object.assign({}, appJSON.expo.hooks, {
-									postExport: appJSON.expo.hooks.postExport.map(function(hook) {
+									// someone can add their own postPub
+									postExport: appJSON.expo.hooks.postExport.map(function (
+										hook
+									) {
 										if (hook.file === "sentry-expo/upload-sourcemaps") {
 											return {
 												file: "sentry-expo/upload-sourcemaps",
@@ -311,9 +354,28 @@ function version(program, projectPath) {
 						});
 					}
 				}
+				fs.writeFileSync(appJSONPath, JSON.stringify(appJSON, null, 2));
 			}
-			fs.writeFileSync(appJSONPath, JSON.stringify(appJSON, null, 2));
-			if (program.legacy) {
+			if (isExpoApp && !isBareExpoWorkflow) {
+				if (!programOpts.neverIncrementBuild) {
+					const buildNumber = dottie.get(appJSON, "expo.ios.buildNumber");
+					const newBuildVersion = getNewVersionCode(
+						programOpts,
+						parseInt(buildNumber, 10),
+						appPkg.version,
+						programOpts.resetBuild
+					).toString();
+
+					appJSON = Object.assign({}, appJSON, {
+						expo: Object.assign({}, appJSON.expo, {
+							ios: Object.assign({}, appJSON.expo.ios, {
+								buildNumber: newBuildVersion
+							})
+						})
+					});
+					fs.writeFileSync(appJSONPath, JSON.stringify(appJSON, null, 2));
+				}
+			} else if (program.legacy) {
 				try {
 					child.execSync("xcode-select --print-path", {
 						stdio: ["ignore", "ignore", "pipe"]
@@ -401,7 +463,7 @@ function version(program, projectPath) {
 				// Find any folder ending in .xcodeproj
 				const xcodeProjects = fs
 					.readdirSync(programOpts.ios)
-					.filter(file => /\.xcodeproj$/i.test(file));
+					.filter((file) => /\.xcodeproj$/i.test(file));
 
 				if (xcodeProjects.length < 1) {
 					throw new Error(`Xcode project not found in "${programOpts.ios}"`);
@@ -411,11 +473,11 @@ function version(program, projectPath) {
 				const xcode = Xcode.open(path.join(projectFolder, "project.pbxproj"));
 				const plistFilenames = getPlistFilenames(xcode);
 
-				xcode.document.projects.forEach(project => {
+				xcode.document.projects.forEach((project) => {
 					!programOpts.neverIncrementBuild &&
-						project.targets.filter(Boolean).forEach(target => {
+						project.targets.filter(Boolean).forEach((target) => {
 							target.buildConfigurationsList.buildConfigurations.forEach(
-								config => {
+								(config) => {
 									if (target.name === appPkg.name) {
 										console.log(target.name, appPkg.name);
 										const CURRENT_PROJECT_VERSION = getNewVersionCode(
@@ -440,14 +502,14 @@ function version(program, projectPath) {
 							);
 						});
 
-					const plistFiles = plistFilenames.map(filename => {
+					const plistFiles = plistFilenames.map((filename) => {
 						return fs.readFileSync(
 							path.join(programOpts.ios, filename),
 							"utf8"
 						);
 					});
 
-					const parsedPlistFiles = plistFiles.map(file => {
+					const parsedPlistFiles = plistFiles.map((file) => {
 						return plist.parse(file);
 					});
 
@@ -517,21 +579,21 @@ function version(program, projectPath) {
 	}
 
 	return pSettle([android, ios].filter(Boolean))
-		.then(function(result) {
+		.then(function (result) {
 			const errs = result
-				.filter(function(item) {
+				.filter(function (item) {
 					return item.isRejected;
 				})
-				.map(function(item) {
+				.map(function (item) {
 					return item.reason;
 				});
 
 			if (errs.length) {
 				errs
-					.reduce(function(a, b) {
+					.reduce(function (a, b) {
 						return a.concat(b);
 					}, [])
-					.forEach(function(err) {
+					.forEach(function (err) {
 						if (program.outputHelp) {
 							log(
 								Object.assign({ style: "red", text: err.toString() }, err),
@@ -545,9 +607,9 @@ function version(program, projectPath) {
 				}
 
 				throw errs
-					.map(function(errGrp, index) {
+					.map(function (errGrp, index) {
 						return errGrp
-							.map(function(err) {
+							.map(function (err) {
 								return err.text;
 							})
 							.join(", ");
@@ -628,7 +690,7 @@ function version(program, projectPath) {
 
 			return child.execSync("git log -1 --pretty=%H", gitCmdOpts).toString();
 		})
-		.catch(function(err) {
+		.catch(function (err) {
 			if (process.env.RNV_ENV === "ava") {
 				console.error(err);
 			}
