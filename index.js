@@ -185,6 +185,7 @@ function version(program, projectPath) {
 	const appJSONPath = path.join(projPath, "app.json");
 	const isExpoApp = isExpoProject(projPath);
 	const isBareExpoWorkflow = programOpts.isBareExpoWorkflow;
+	const isSelfHostingBundles = programOpts.isSelfHostingBundles;
 
 	isExpoApp && log({ text: "Expo detected" }, programOpts.quiet);
 
@@ -323,7 +324,7 @@ function version(program, projectPath) {
 						}),
 					});
 
-					if (appJSON.expo.hooks) {
+					if (isSelfHostingBundles && appJSON.expo.hooks) {
 						appJSON = Object.assign({}, appJSON, {
 							expo: Object.assign({}, appJSON.expo, {
 								hooks: Object.assign({}, appJSON.expo.hooks, {
@@ -337,6 +338,7 @@ function version(program, projectPath) {
 												config: Object.assign({}, hook.config, {
 													release:
 														appJSON.expo.ios.bundleIdentifier +
+														"@" +
 														appPkg.version +
 														"+" +
 														newBuildVersion,
@@ -649,7 +651,11 @@ function version(program, projectPath) {
 						child.spawnSync(
 							"git",
 							["add"].concat(
-								isExpoApp ? appJSONPath : [programOpts.android, programOpts.ios]
+								isBareExpoWorkflow
+									? [appJSONPath, programOpts.android, programOpts.ios]
+									: isExpoApp
+									? appJSONPath
+									: [programOpts.android, programOpts.ios]
 							),
 							gitCmdOpts
 						);
