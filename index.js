@@ -13,7 +13,7 @@ const resolveFrom = require("resolve-from");
 const semver = require("semver");
 const stripIndents = require("common-tags/lib/stripIndents");
 const unique = require("lodash.uniq");
-const Xcode = require("pbxproj-dom/xcode").Xcode;
+const Xcode = require("@mmbt/pbxproj-dom/xcode").Xcode;
 
 /**
  * Custom type definition for Promises
